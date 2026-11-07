@@ -20,6 +20,7 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
   const [message, setMessage] = useState('')
   const [ready, setReady] = useState(false)
   const busy = useRef(false)
+  const writeQueue = useRef<Promise<void>>(Promise.resolve())
   const textRef = useRef(texts)
   const deletedRef = useRef(deleted)
   const cloudRowsRef = useRef<CloudRow[]>([])
@@ -35,11 +36,16 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
       return { user_id: userId, id: p.id, payload: { ...p, modifiedAt }, modified_at: modifiedAt, deleted_at: null }
     })
     const deletedRows = Object.entries(nextDeleted).map(([id, deletedAt]) => ({ user_id: userId, id, payload: {}, modified_at: deletedAt, deleted_at: deletedAt }))
-    const { error } = await supabase.from('passages').upsert([...liveRows, ...deletedRows], { onConflict: 'user_id,id' })
-    if (error) throw error
+    // Keep writes ordered so an older save cannot land after a newer delete.
+    const write = writeQueue.current.then(async () => {
+      const { error } = await supabase!.from('passages').upsert([...liveRows, ...deletedRows], { onConflict: 'user_id,id' })
+      if (error) throw error
+    })
+    writeQueue.current = write.catch(() => {})
+    await write
   }, [])
 
-  const synchronize = useCallback(async (activeSession: Session) => {
+  const synchronize = useCallback(async () => {
     if (!supabase || busy.current) return
     busy.current = true
     setStatus('syncing')
@@ -74,7 +80,6 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
       const afterDeleted = JSON.stringify(nextDeleted)
       if (before !== after) setTexts(merged)
       if (beforeDeleted !== afterDeleted) setDeleted(nextDeleted)
-      await writeRows(activeSession.user.id, merged, nextDeleted)
       setReady(true)
       setStatus('synced')
       setMessage('Your passages are up to date on this device.')
@@ -84,7 +89,7 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
     } finally {
       busy.current = false
     }
-  }, [setDeleted, setTexts, writeRows])
+  }, [setDeleted, setTexts])
 
   useEffect(() => {
     if (!supabase) return
@@ -98,9 +103,9 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
 
   useEffect(() => {
     if (!session || !supabase) return
-    void synchronize(session)
-    const timer = window.setInterval(() => void synchronize(session), 15_000)
-    const onFocus = () => { if (document.visibilityState === 'visible') void synchronize(session) }
+    void synchronize()
+    const timer = window.setInterval(() => void synchronize(), 15_000)
+    const onFocus = () => { if (document.visibilityState === 'visible') void synchronize() }
     document.addEventListener('visibilitychange', onFocus)
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onFocus) }
   }, [session, synchronize])
@@ -138,7 +143,7 @@ export default function CloudSync({ texts, setTexts, deleted, setDeleted }: Prop
     <button className={`sync-pill ${status}`} onClick={() => setOpen(true)}><Icon size={14}/><span>{label}</span></button>
     {open && <div className="modal-backdrop sync-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setOpen(false) }}><section className="modal sync-modal" aria-labelledby="sync-title" aria-modal="true" role="dialog">
       <div className="modal-title"><div><span className="eyebrow">TAHFEEDH CLOUD</span><h2 id="sync-title">Sync your passages</h2></div><button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}><X size={19}/></button></div>
-      {!supabase ? <><p className="sync-copy">Cloud sync is ready to connect, but this deployment has no Supabase project configured yet. Add the two public project values to the Vercel environment to turn on accounts and sync.</p><div className="sync-setup"><b>Required Vercel variables</b><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_PUBLISHABLE_KEY</code><small>Then run the SQL in <strong>supabase/schema.sql</strong> once in your Supabase project.</small></div></> : session ? <><div className="connected-card"><span className="connected-icon"><Cloud size={18}/></span><div><b>Connected account</b><small>{session.user.email}</small></div></div><div className="sync-state"><span className={`sync-indicator ${status}`}/>{status === 'synced' ? 'Your passages are syncing across devices.' : status === 'error' ? 'Sync needs attention.' : 'Syncing your library…'}</div><div className="sync-actions"><button className="subtle" onClick={() => void synchronize(session)}><RefreshCw size={14}/> Sync now</button><button className="subtle signout" onClick={() => void signOut()}><LogOut size={14}/> Sign out</button></div></> : <><p className="sync-copy">Create an account or sign in on each device to keep one shared library.</p><form className="sync-form" onSubmit={submitAuth}><label>Email<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" required minLength={8} autoComplete={signup?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="primary" type="submit">{signup?'Create account':'Sign in'} <Check size={15}/></button></form><button className="sync-switch" onClick={()=>{setSignup(!signup);setMessage('')}}>{signup?'Already have an account? Sign in':'New to Tahfeedh sync? Create an account'}</button></>}
+      {!supabase ? <><p className="sync-copy">Cloud sync is ready to connect, but this deployment has no Supabase project configured yet. Add the two public project values to the Vercel environment to turn on accounts and sync.</p><div className="sync-setup"><b>Required Vercel variables</b><code>VITE_SUPABASE_URL</code><code>VITE_SUPABASE_PUBLISHABLE_KEY</code><small>Then run the SQL in <strong>supabase/schema.sql</strong> once in your Supabase project.</small></div></> : session ? <><div className="connected-card"><span className="connected-icon"><Cloud size={18}/></span><div><b>Connected account</b><small>{session.user.email}</small></div></div><div className="sync-state"><span className={`sync-indicator ${status}`}/>{status === 'synced' ? 'Your passages are syncing across devices.' : status === 'error' ? 'Sync needs attention.' : 'Syncing your library…'}</div><div className="sync-actions"><button className="subtle" onClick={() => void synchronize()}><RefreshCw size={14}/> Sync now</button><button className="subtle signout" onClick={() => void signOut()}><LogOut size={14}/> Sign out</button></div></> : <><p className="sync-copy">Create an account or sign in on each device to keep one shared library.</p><form className="sync-form" onSubmit={submitAuth}><label>Email<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label><label>Password<input type="password" required minLength={8} autoComplete={signup?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="primary" type="submit">{signup?'Create account':'Sign in'} <Check size={15}/></button></form><button className="sync-switch" onClick={()=>{setSignup(!signup);setMessage('')}}>{signup?'Already have an account? Sign in':'New to Tahfeedh sync? Create an account'}</button></>}
       {message&&<p className={`sync-message ${status==='error'?'error':''}`}>{message}</p>}
       {session&&<p className="sync-footnote">Your passages are private to your account. Sign in with the same email on your other devices.</p>}
     </section></div>}
