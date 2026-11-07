@@ -37,6 +37,7 @@ const nav: { label: Page; icon: typeof Home }[] = [
   { label: 'Home', icon: Home }, { label: 'Library', icon: Library },
   { label: 'Revision', icon: Clock3 }, { label: 'Progress', icon: Target },
 ]
+const demoIds = new Set(['p1', 'p2', 'p3'])
 const wordsOf = (text: string) => text.match(/\s+|[^\s]+/gu) ?? []
 const plainTokens = (text: string) => text.match(/\S+/gu) ?? []
 const normalize = (word: string) => word.normalize('NFC')
@@ -74,10 +75,8 @@ function readPassages(): Passage[] {
     const value: unknown = JSON.parse(localStorage.getItem('tahfeedh.texts') ?? 'null')
     if (!Array.isArray(value)) return seed
     if (!value.every(item => item && typeof item.id === 'string' && typeof item.title === 'string' && typeof item.text === 'string')) return seed
-    const originalExamples = [
-      ['p1', 8, 84, 'Today'], ['p2', 5, 71, 'Yesterday'], ['p3', 12, 96, '2 days ago'],
-    ] as const
-    return (value as Passage[]).map(item => originalExamples.some(([id, sessions, accuracy, updated]) => item.id === id && item.sessions === sessions && item.accuracy === accuracy && item.updated === updated)
+    const originalExamples = [['p1', 8, 84], ['p2', 5, 71], ['p3', 12, 96]] as const
+    return (value as Passage[]).map(item => originalExamples.some(([id, sessions, accuracy]) => item.id === id && item.sessions === sessions && item.accuracy === accuracy)
       ? { ...item, sessions: 0, accuracy: 0, accuracyHistory: [], practiceDates: [], practiceHistory: [], due: true, updated: 'Example' }
       : item)
   } catch { return seed }
@@ -184,7 +183,8 @@ export default function App() {
     if (stage !== 3 || !practiceMode || !['hide', 'cloze'].includes(practiceMode)) return []
     return practiceMode === 'hide' ? (index % 2 === 1 ? [index] : []) : (index % 3 === 1 ? [index] : [])
   })
-  const blanksCorrect = blankIndexes.filter(index => normalize(blankAnswers[index] ?? '') === normalize(plainTokens(sectionText)[index] ?? '')).length
+  const sectionPlainTokens = useMemo(() => plainTokens(sectionText), [sectionText])
+  const blanksCorrect = blankIndexes.filter(index => normalize(blankAnswers[index] ?? '') === normalize(sectionPlainTokens[index] ?? '')).length
   const currentDay = new Date().toLocaleDateString(undefined, { weekday: 'short' })
   const currentDate = new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
   const greeting = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 18 ? 'Good afternoon' : 'Good evening'
@@ -212,7 +212,7 @@ export default function App() {
     if (!cleanTitle || !cleanBody || !cleanSections.length) return
     const now = Date.now()
     const passage: Passage = {
-      id: editor?.id ?? crypto.randomUUID(), title: cleanTitle, subject: subject.trim() || 'Unsorted',
+      id: editor && !demoIds.has(editor.id) ? editor.id : crypto.randomUUID(), title: cleanTitle, subject: subject.trim() || 'Unsorted',
       language, text: cleanBody, sections: cleanSections, updated: 'Just now', modifiedAt: now,
       sessions: editor?.sessions ?? 0, accuracy: editor?.accuracy ?? 0,
       accuracyHistory: editor?.accuracyHistory, practiceDates: editor?.practiceDates, practiceHistory: editor?.practiceHistory, due: editor?.due ?? true,
@@ -375,13 +375,14 @@ function ModeCard({ icon, title, text, onClick }: { icon: ReactNode; title: stri
 }
 function renderTokens(tokens: string[], mode: PracticeMode | null, stage: number, blanks: number[], answers: Record<number, string>, checked: boolean, setAnswers: (update: (value: Record<number, string>) => Record<number, string>) => void, checkBlanks: () => void) {
   let index = 0
+  const blankSet = new Set(blanks)
   return tokens.map((part, tokenIndex) => {
     if (/^\s+$/u.test(part)) return part
     const wordIndex = index++
     const hidden = mode === 'hide' ? stage === 2 ? wordIndex % 4 === 2 : false
       : mode === 'first' ? stage >= 2
         : mode === 'cloze' ? stage === 2 && wordIndex % 3 === 1 : false
-    const blank = blanks.includes(wordIndex)
+    const blank = blankSet.has(wordIndex)
     if (blank) return <input key={tokenIndex} aria-label={`Missing word ${wordIndex + 1}`} className={`blank-input ${checked ? (normalize(answers[wordIndex] ?? '') === normalize(part) ? 'is-correct' : 'is-wrong') : ''}`} style={{ width: `${Math.min(12, Math.max(4, [...part].length + 1))}ch` }} dir="auto" value={answers[wordIndex] ?? ''} autoComplete="off" onChange={event => setAnswers(old => ({ ...old, [wordIndex]: event.target.value }))} onKeyDown={event => { if (event.key === 'Enter') checkBlanks() }}/>
     return <span key={tokenIndex}>{hidden ? mode === 'first' ? `${[...part][0] ?? ''}·` : '＿'.repeat(Math.min(7, Math.max(3, [...part].length))) : part}</span>
   })

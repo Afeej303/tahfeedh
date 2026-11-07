@@ -26,7 +26,7 @@ Sync uses Supabase Auth and a private Postgres table with row-level security. Ea
 4. Restart the local dev server. For Vercel, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` under the project's environment variables, then redeploy.
 5. In Tahfeedh, choose **Connect sync**, create an account or sign in, then sign in with the same account on the other device.
 
-Changes sync automatically while connected and when the app becomes active. Deletions are recorded as sync tombstones so a passage deleted on one device is removed from the others. Built-in example passages are not uploaded and are removed from the library the first time cloud sync is used. Existing custom passages are merged by their last modification time. Session scores and practice dates are included in passage data so dashboard progress follows the account across devices.
+Changes sync automatically while connected and when the app becomes active. Deletions are recorded as sync tombstones so a passage deleted on one device is removed from the others. Built-in example passages are not uploaded and are removed from the library the first time cloud sync is used. Editing an example creates your own passage so it can sync like the rest of your library. Existing custom passages are merged by their last modification time. Session scores and practice dates are included in passage data so dashboard progress follows the account across devices.
 
 ## Production build
 
