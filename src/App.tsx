@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BookOpen, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, FileText, Flame, Home, Library, ListChecks, MoreHorizontal, Play, Plus, Search, Settings2, Sparkles, Target, Trash2, X } from './icons'
+import CloudSync from './CloudSync'
 
-type Passage = { id: string; title: string; subject: string; language: string; text: string; sections?: string[]; updated: string; sessions: number; accuracy: number; due: boolean }
+export type Passage = { id: string; title: string; subject: string; language: string; text: string; sections?: string[]; updated: string; modifiedAt?: number; sessions: number; accuracy: number; due: boolean }
 const seed: Passage[] = [
   { id: 'p1', title: 'The art of learning', subject: 'Personal growth', language: 'English', text: 'Learning is not attained by chance, it must be sought for with ardor and attended to with diligence. The beautiful thing about learning is nobody can take it away from you.', updated: 'Today', sessions: 8, accuracy: 84, due: true },
   { id: 'p2', title: 'Al-Muqaddimah', subject: 'Arabic · History', language: 'Arabic', text: 'إن التاريخ في ظاهره لا يزيد على الإخبار، ولكن في باطنه نظر وتحقيق.', updated: 'Yesterday', sessions: 5, accuracy: 71, due: true },
@@ -25,19 +26,21 @@ function compare(expected:string, actual:string) {
 }
 export default function App(){
  const [texts,setTexts]=useState<Passage[]>(()=>{try{return JSON.parse(localStorage.getItem('tahfeedh.texts')||'null')||seed}catch{return seed}})
+ const [deleted,setDeleted]=useState<Record<string,number>>(()=>{try{return JSON.parse(localStorage.getItem('tahfeedh.deleted')||'{}')}catch{return {}}})
  const [page,setPage]=useState('Home'),[query,setQuery]=useState(''),[modal,setModal]=useState(false),[title,setTitle]=useState(''),[subject,setSubject]=useState('Personal'),[language,setLanguage]=useState('English'),[body,setBody]=useState(''),[editor,setEditor]=useState<Passage|null>(null),[segmentStep,setSegmentStep]=useState(false),[chunks,setChunks]=useState<string[]>([])
  const [active,setActive]=useState<Passage|null>(null),[mode,setMode]=useState<Mode>('hide'),[stage,setStage]=useState(1),[answer,setAnswer]=useState(''),[checked,setChecked]=useState(false),[elapsed,setElapsed]=useState(0),[done,setDone]=useState(0),[blankAnswers,setBlankAnswers]=useState<Record<number,string>>({}),[blankChecked,setBlankChecked]=useState(false)
  useEffect(()=>localStorage.setItem('tahfeedh.texts',JSON.stringify(texts)),[texts])
+ useEffect(()=>localStorage.setItem('tahfeedh.deleted',JSON.stringify(deleted)),[deleted])
  useEffect(()=>{if(active&&!checked){const id=setInterval(()=>setElapsed(x=>x+1),1000);return()=>clearInterval(id)}},[active,checked])
  const filtered=useMemo(()=>texts.filter(x=>(x.title+' '+x.subject).toLowerCase().includes(query.toLowerCase())),[texts,query])
  const stats=useMemo(()=>({words:texts.reduce((n,t)=>n+(t.text.match(/\S+/gu)?.length??0),0),due:texts.filter(t=>t.due).length,accuracy:texts.length?Math.round(texts.reduce((n,t)=>n+t.accuracy,0)/texts.length):0}),[texts])
  const openAdd=(p?:Passage)=>{setEditor(p??null);setTitle(p?.title??'');setSubject(p?.subject??'Personal');setLanguage(p?.language??'English');setBody(p?.text??'');setChunks(p?.sections??[]);setSegmentStep(false);setModal(true)}
  const splitText=(text:string)=>{const paras=text.split(/\n\s*\n/u).map(x=>x.trim()).filter(Boolean);return paras.length>1?paras:text.split(/(?<=[.!?؟۔])\s+/u).map(x=>x.trim()).filter(Boolean)}
- const saveText=()=>{if(!title.trim()||!body.trim())return;const p:Passage={id:editor?.id??crypto.randomUUID(),title:title.trim(),subject,language,text:body,sections:chunks.length?chunks:splitText(body),updated:'Just now',sessions:editor?.sessions??0,accuracy:editor?.accuracy??0,due:true};setTexts(old=>editor?old.map(x=>x.id===p.id?p:x):[p,...old]);setModal(false)}
- const deletePassage=(p:Passage)=>{if(window.confirm(`Delete “${p.title}” from your library? This can't be undone.`))setTexts(old=>old.filter(item=>item.id!==p.id))}
+ const saveText=()=>{if(!title.trim()||!body.trim())return;const p:Passage={id:editor?.id??crypto.randomUUID(),title:title.trim(),subject,language,text:body,sections:chunks.length?chunks:splitText(body),updated:'Just now',modifiedAt:Date.now(),sessions:editor?.sessions??0,accuracy:editor?.accuracy??0,due:true};setTexts(old=>editor?old.map(x=>x.id===p.id?p:x):[p,...old]);setDeleted(old=>{const next={...old};delete next[p.id];return next});setModal(false)}
+ const deletePassage=(p:Passage)=>{if(window.confirm(`Delete “${p.title}” from your library? This can't be undone.`)){setTexts(old=>old.filter(item=>item.id!==p.id));setDeleted(old=>({...old,[p.id]:Date.now()}))}}
  const startSegmenting=()=>{if(!title.trim()||!body.trim())return;setChunks(splitText(body));setSegmentStep(true)}
  const begin=(p:Passage,m:Mode='hide')=>{setActive(p);setMode(m);setStage(1);setAnswer('');setChecked(false);setElapsed(0);setBlankAnswers({});setBlankChecked(false);setPage('Practice')}
- const finish=()=>{const result=compare(active!.text,answer);setTexts(old=>old.map(t=>t.id===active!.id?{...t,accuracy:Math.max(t.accuracy,result.accuracy),sessions:t.sessions+1,updated:'Just now',due:result.accuracy<85}:t));setDone(result.accuracy);setChecked(true)}
+ const finish=()=>{const result=compare(active!.text,answer);setTexts(old=>old.map(t=>t.id===active!.id?{...t,accuracy:Math.max(t.accuracy,result.accuracy),sessions:t.sessions+1,updated:'Just now',modifiedAt:Date.now(),due:result.accuracy<85}:t));setDone(result.accuracy);setChecked(true)}
  const back=()=>{setActive(null);setChecked(false);setPage('Home')}
  const words=useMemo(()=>wordsOf(active?.text??''),[active])
  const blankWords=(active?.text.match(/\S+/gu)??[]).filter((_,i)=>i%2===1)
@@ -52,7 +55,7 @@ export default function App(){
    <div className="sidebar-spacer"/><div className="sidebar-note"><div className="note-icon"><Flame size={16}/></div><div><b>3 day streak</b><p>You're building a habit.<br/>Keep it going.</p><div className="week">{['M','T','W','T','F','S','S'].map((d,i)=><span className={i<3?'done':''} key={i}>{d}</span>)}</div></div></div>
    <button className="nav-item"><Settings2 size={17}/> Settings</button><button className="profile"><div className="avatar small">A</div><span><b>Afeej</b><small>Free plan</small></span><MoreHorizontal size={18}/></button>
   </aside>
-  <main className="main"><header className="topbar"><div className="crumb"><span>Workspace</span><ChevronRight size={14}/><b>{active?'Practice':page}</b></div><div className="top-actions"><button className="search-box" onClick={()=>document.getElementById('search')?.focus()}><Search size={15}/><input id="search" placeholder="Search passages..." value={query} onChange={e=>setQuery(e.target.value)}/><kbd>⌘ K</kbd></button><button className="icon-btn"><CircleHelp size={18}/></button><div className="avatar small">A</div></div></header>
+  <main className="main"><header className="topbar"><div className="crumb"><span>Workspace</span><ChevronRight size={14}/><b>{active?'Practice':page}</b></div><div className="top-actions"><CloudSync texts={texts} setTexts={setTexts} deleted={deleted} setDeleted={setDeleted}/><button className="search-box" onClick={()=>document.getElementById('search')?.focus()}><Search size={15}/><input id="search" placeholder="Search passages..." value={query} onChange={e=>setQuery(e.target.value)}/><kbd>⌘ K</kbd></button><button className="icon-btn"><CircleHelp size={18}/></button><div className="avatar small">A</div></div></header>
    {active?<section className="practice"><div className="practice-top"><button className="back-link" onClick={back}><ChevronLeft size={17}/> Exit practice</button><div className="timer"><Clock3 size={15}/>{fmt(elapsed)}</div></div>
     <div className="practice-heading"><div className="eyebrow">{active.subject} <span>·</span> {active.language}</div><h1>{active.title}</h1><p>Take your time. Recall at your own pace.</p></div>
     {!checked?<><div className="session-progress"><span>SECTION 1 OF 1</span><span>Stage {stage} <i>of 4</i></span><div className="progress-track"><b style={{width:`${stage*25}%`}}/></div></div>
