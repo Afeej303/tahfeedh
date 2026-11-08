@@ -2,6 +2,8 @@
 
 Tahfeedh is a responsive, local-first memorization workspace for learning passages by heart. It offers progressive hiding, first-letter prompts, cloze practice, typing recall, multi-section sessions, a personal library, a review queue, and progress based on completed sessions.
 
+Tahfeedh can also be installed as a Progressive Web App (PWA) from a supported browser. The service worker caches the app shell and built assets for offline opening; cloud sync still requires an internet connection. On desktop, use the install icon in the browser address bar or the browser menu. On iPhone/iPad, use Safari's **Share → Add to Home Screen**.
+
 ## Requirements
 
 - Node.js 20.19+ or 22.12+

@@ -51,6 +51,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 1px 8px 27px; color: var(--ink); text-decoration: none; }
 .brandmark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; background: #e5f0df; color: var(--green); }
+.brandmark img { width: 28px; height: 28px; }
 .brand-name { font-size: 20px; font-weight: 750; letter-spacing: -.8px; }
 .workspace { display: flex; align-items: center; gap: 10px; min-height: 58px; margin-bottom: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
 .workspace > span { display: grid; gap: 3px; }
@@ -240,6 +241,10 @@ kbd { font-family: inherit; }
 .mode-intro { margin-bottom: 17px; text-align: center; }
 .mode-intro h2 { margin: 8px 0 5px; font-size: 21px; letter-spacing: -.03em; }
 .mode-intro p { margin: 0; color: var(--muted); font-size: 13px; }
+.session-plan { display: grid; gap: 5px; margin: 0 0 13px; padding: 13px 15px; border: 1px solid #dfe8da; border-radius: 10px; background: #f4f8f1; }
+.session-plan b { color: #405d42; font-size: 13px; }
+.session-plan span { color: #4f724b; font-size: 15px; font-weight: 700; letter-spacing: .08em; }
+.session-plan small { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 .mode-card { display: flex; min-height: 100px; align-items: center; gap: 13px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: white; color: var(--ink); text-align: left; transition: border-color .15s, background .15s, transform .15s; }
 .mode-card:hover { transform: translateY(-1px); border-color: #b8cbb0; background: #fcfefb; }

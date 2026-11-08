@@ -390,7 +390,7 @@ export default function App() {
 
   return <div className="app">
     <aside className="sidebar" aria-label="Main navigation">
-      <a className="brand" href="#home" onClick={event => { event.preventDefault(); go('Home') }}><span className="brandmark"><Sparkles size={17}/></span><span className="brand-name">tahfeedh</span></a>
+      <a className="brand" href="#home" onClick={event => { event.preventDefault(); go('Home') }}><span className="brandmark"><img src="/icons/tahfeedh-mark.svg" alt="" /></span><span className="brand-name">tahfeedh</span></a>
       <div className="workspace"><div className="avatar">T</div><span><b>Your workspace</b><small>Private library</small></span></div>
       <button className="add-btn" onClick={() => openAdd()}><Plus size={17}/> Add a passage</button>
       <div className="nav-label">LIBRARY</div>
