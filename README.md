@@ -1,6 +1,6 @@
 # Tahfeedh
 
-Tahfeedh is a responsive, local-first memorization workspace for learning passages by heart. It offers progressive hiding, first-letter prompts, cloze practice, typing recall, section-by-section sessions, a personal library, a review queue, and progress based on completed sessions.
+Tahfeedh is a responsive, local-first memorization workspace for learning passages by heart. It offers progressive hiding, first-letter prompts, cloze practice, typing recall, multi-section sessions, a personal library, a review queue, and progress based on completed sessions.
 
 ## Requirements
 
@@ -27,6 +27,8 @@ Sync uses Supabase Auth and a private Postgres table with row-level security. Ea
 5. In Tahfeedh, choose **Connect sync**, create an account or sign in, then sign in with the same account on the other device.
 
 Changes sync automatically while connected and when the app becomes active. Deletions are recorded as sync tombstones so a passage deleted on one device is removed from the others. Built-in example passages are not uploaded and are removed from the library the first time cloud sync is used. Editing an example creates your own passage so it can sync like the rest of your library. Existing custom passages are merged by their last modification time. Session scores and practice dates are included in passage data so dashboard progress follows the account across devices.
+
+Each practice session includes up to three sections. Tahfeedh mixes sections that are due for review with new sections, then offers a combined recall step to practice moving between the selected sections. Review timing adjusts to recall accuracy.
 
 ## Production build
 

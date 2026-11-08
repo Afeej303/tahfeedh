@@ -20,8 +20,11 @@ export type Passage = {
   accuracyHistory?: number[]
   practiceDates?: string[]
   practiceHistory?: { date: string; accuracy: number }[]
+  sectionProgress?: Record<string, SectionProgress>
   due: boolean
 }
+
+type SectionProgress = { attempts: number; accuracy: number; lastPracticedAt: number; nextReviewAt: number }
 
 type Page = 'Home' | 'Library' | 'Revision' | 'Progress'
 type PracticeMode = 'hide' | 'first' | 'cloze' | 'type'
@@ -42,6 +45,59 @@ const wordsOf = (text: string) => text.match(/\s+|[^\s]+/gu) ?? []
 const plainTokens = (text: string) => text.match(/\S+/gu) ?? []
 const normalize = (word: string) => word.normalize('NFC')
 const localDateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+function reviewInterval(accuracy: number) {
+  if (accuracy < 60) return 6 * 60 * 60 * 1000
+  if (accuracy < 80) return 24 * 60 * 60 * 1000
+  if (accuracy < 95) return 3 * 24 * 60 * 60 * 1000
+  return 7 * 24 * 60 * 60 * 1000
+}
+
+function passageNeedsReview(progress: Record<string, SectionProgress>, sectionCount: number, now: number) {
+  return Array.from({ length: sectionCount }, (_, index) => progress[String(index)])
+    .some(section => !section || section.attempts === 0 || section.nextReviewAt <= now)
+}
+
+function planSession(passage: Passage, now = Date.now()) {
+  const sections = passage.sections?.filter(section => section.trim()) ?? []
+  const count = sections.length || 1
+  const limit = Math.min(3, count)
+  const progress = passage.sectionProgress ?? {}
+  const dueReviews = Array.from({ length: count }, (_, index) => index)
+    .filter(index => (progress[String(index)]?.attempts ?? 0) > 0 && (progress[String(index)]?.nextReviewAt ?? 0) <= now)
+    .sort((a, b) => (progress[String(a)]?.nextReviewAt ?? 0) - (progress[String(b)]?.nextReviewAt ?? 0))
+  const newSections = Array.from({ length: count }, (_, index) => index)
+    .filter(index => (progress[String(index)]?.attempts ?? 0) === 0)
+  const selected = dueReviews.slice(0, 2)
+  if (newSections.length && selected.length < limit) selected.push(newSections.shift()!)
+  while (selected.length < limit && newSections.length) selected.push(newSections.shift()!)
+  while (selected.length < limit && dueReviews.length) {
+    const nextDue = dueReviews.find(index => !selected.includes(index))
+    if (nextDue === undefined) break
+    selected.push(nextDue)
+  }
+  if (!selected.length) {
+    selected.push(...Array.from({ length: count }, (_, index) => index)
+      .sort((a, b) => (progress[String(a)]?.nextReviewAt ?? 0) - (progress[String(b)]?.nextReviewAt ?? 0))
+      .slice(0, limit))
+  }
+  return selected.sort((a, b) => a - b)
+}
+
+function addSession(passage: Passage, accuracy: number, now: number): Passage {
+  const date = localDateKey(new Date(now))
+  return {
+    ...passage,
+    accuracy,
+    accuracyHistory: [...(passage.accuracyHistory ?? (passage.sessions ? [passage.accuracy] : [])), accuracy].slice(-20),
+    practiceDates: [...new Set([...(passage.practiceDates ?? []), date])],
+    practiceHistory: [...(passage.practiceHistory ?? []), { date, accuracy }].slice(-100),
+    sessions: passage.sessions + 1,
+    updated: 'Just now',
+    modifiedAt: now,
+    due: passageNeedsReview(passage.sectionProgress ?? {}, passage.sections?.filter(section => section.trim()).length || 1, now),
+  }
+}
 
 function compare(expected: string, actual: string): Comparison {
   const source = plainTokens(expected)
@@ -109,7 +165,10 @@ export default function App() {
   const [active, setActive] = useState<Passage | null>(null)
   const [practiceMode, setPracticeMode] = useState<PracticeMode | null>(null)
   const [stage, setStage] = useState(1)
-  const [sectionIndex, setSectionIndex] = useState(0)
+  const [sessionSections, setSessionSections] = useState<number[]>([])
+  const [sessionPosition, setSessionPosition] = useState(0)
+  const [sectionScores, setSectionScores] = useState<Record<number, number>>({})
+  const [linking, setLinking] = useState(false)
   const [answer, setAnswer] = useState('')
   const [checked, setChecked] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -174,7 +233,8 @@ export default function App() {
   const wordCount = texts.reduce((sum, item) => sum + plainTokens(item.text).length, 0)
   const dueCount = texts.filter(item => item.due).length
   const sections = active ? (active.sections?.filter(section => section.trim()) ?? []).length ? active.sections!.filter(section => section.trim()) : [active.text] : []
-  const sectionText = sections[sectionIndex] ?? ''
+  const sectionIndex = sessionSections[sessionPosition] ?? 0
+  const sectionText = linking ? sessionSections.map(index => sections[index]).filter(Boolean).join('\n\n') : sections[sectionIndex] ?? ''
   const wordTokens = useMemo(() => wordsOf(sectionText), [sectionText])
   let wordIndex = 0
   const blankIndexes = wordTokens.flatMap(part => {
@@ -211,11 +271,14 @@ export default function App() {
     const cleanSections = (chunks.length ? chunks : splitText(cleanBody)).map(value => value.trim()).filter(Boolean)
     if (!cleanTitle || !cleanBody || !cleanSections.length) return
     const now = Date.now()
+    const keepSectionProgress = Boolean(editor && JSON.stringify(editor.sections ?? []) === JSON.stringify(cleanSections))
     const passage: Passage = {
       id: editor && !demoIds.has(editor.id) ? editor.id : crypto.randomUUID(), title: cleanTitle, subject: subject.trim() || 'Unsorted',
       language, text: cleanBody, sections: cleanSections, updated: 'Just now', modifiedAt: now,
       sessions: editor?.sessions ?? 0, accuracy: editor?.accuracy ?? 0,
-      accuracyHistory: editor?.accuracyHistory, practiceDates: editor?.practiceDates, practiceHistory: editor?.practiceHistory, due: editor?.due ?? true,
+      accuracyHistory: editor?.accuracyHistory, practiceDates: editor?.practiceDates, practiceHistory: editor?.practiceHistory,
+      due: keepSectionProgress ? editor?.due ?? true : true,
+      sectionProgress: keepSectionProgress ? editor?.sectionProgress : undefined,
     }
     setTexts(old => editor ? old.map(item => item.id === passage.id ? passage : item) : [passage, ...old])
     setDeleted(old => { const next = { ...old }; delete next[passage.id]; return next })
@@ -244,7 +307,10 @@ export default function App() {
   const begin = (passage: Passage) => {
     setActive(passage)
     setPracticeMode(null)
-    setSectionIndex(0)
+    setSessionSections(planSession(passage))
+    setSessionPosition(0)
+    setSectionScores({})
+    setLinking(false)
     setStage(1)
     setAnswer('')
     setChecked(false)
@@ -259,37 +325,59 @@ export default function App() {
     setPracticeMode(null)
     setChecked(false)
     setResult(null)
+    setLinking(false)
     setPage('Home')
   }
   const selectMode = (mode: PracticeMode) => { setPracticeMode(mode); setStage(mode === 'type' ? 4 : 1); setStartedAt(Date.now()); setElapsed(0) }
   const checkBlanks = () => setBlankChecked(true)
   const startRecall = () => { setStage(4); setAnswer(''); setStartedAt(Date.now()) }
+  const startLinkRecall = () => { setLinking(true); setPracticeMode('type'); setStage(4); setAnswer(''); setChecked(false); setResult(null); setStartedAt(Date.now()); setElapsed(0) }
   const finish = () => {
     if (!active) return
     const score = compare(sectionText, answer)
-    const date = localDateKey()
+    const now = Date.now()
     setTexts(old => old.map(item => item.id !== active.id ? item : {
-      ...item,
-      accuracy: score.accuracy,
-      accuracyHistory: [...(item.accuracyHistory ?? (item.sessions ? [item.accuracy] : [])), score.accuracy].slice(-20),
-      practiceDates: [...new Set([...(item.practiceDates ?? []), date])],
-      practiceHistory: [...(item.practiceHistory ?? []), { date, accuracy: score.accuracy }].slice(-100),
-      sessions: item.sessions + 1,
-      updated: 'Just now',
-      modifiedAt: Date.now(),
-      due: score.accuracy < 85,
+      ...(() => {
+        const sectionProgress = { ...(item.sectionProgress ?? {}) }
+        if (linking) {
+          for (const index of sessionSections) {
+            const key = String(index)
+            const previous = sectionProgress[key]
+            const combinedAccuracy = Math.round(((sectionScores[index] ?? previous?.accuracy ?? score.accuracy) + score.accuracy) / 2)
+            sectionProgress[key] = {
+              attempts: previous?.attempts ?? 1,
+              accuracy: combinedAccuracy,
+              lastPracticedAt: now,
+              nextReviewAt: now + reviewInterval(combinedAccuracy),
+            }
+          }
+          return addSession({ ...item, sectionProgress, due: passageNeedsReview(sectionProgress, sections.length, now) }, score.accuracy, now)
+        }
+        const key = String(sectionIndex)
+        const previous = sectionProgress[key]
+        sectionProgress[key] = {
+          attempts: (previous?.attempts ?? 0) + 1,
+          accuracy: score.accuracy,
+          lastPracticedAt: now,
+          nextReviewAt: now + reviewInterval(score.accuracy),
+        }
+        const updated = { ...item, sectionProgress, due: passageNeedsReview(sectionProgress, sections.length, now), updated: 'Just now', modifiedAt: now }
+        return sessionSections.length === 1 ? addSession(updated, score.accuracy, now) : updated
+      })(),
     }))
+    if (!linking) setSectionScores(old => ({ ...old, [sectionIndex]: score.accuracy }))
     setResult(score)
     setChecked(true)
   }
   const nextSection = () => {
-    setSectionIndex(index => index + 1)
+    setSessionPosition(position => position + 1)
     setStage(1)
     setAnswer('')
     setChecked(false)
     setResult(null)
     setBlankAnswers({})
     setBlankChecked(false)
+    setLinking(false)
     setStartedAt(Date.now())
   }
   const go = (target: Page) => { setPage(target); setActive(null); setPracticeMode(null) }
@@ -317,21 +405,21 @@ export default function App() {
       {active ? <section className="practice">
         <div className="practice-top"><button className="back-link" onClick={exitPractice}><ChevronLeft size={18}/> Exit practice</button><div className="timer"><Clock3 size={16}/>{formatTime(elapsed)}</div></div>
         <div className="practice-heading"><div className="eyebrow">{active.subject} · {active.language}</div><h1>{active.title}</h1><p>Recall one section at a time, at your own pace.</p></div>
-        {!practiceMode ? <div className="mode-picker"><div className="mode-intro"><span className="eyebrow">CHOOSE A PRACTICE</span><h2>How would you like to learn?</h2><p>{sections.length} section{sections.length === 1 ? '' : 's'} · {plainTokens(active.text).length} words</p></div><div className="mode-grid">
+        {!practiceMode ? <div className="mode-picker"><div className="mode-intro"><span className="eyebrow">CHOOSE A PRACTICE</span><h2>How would you like to learn?</h2><p>{sections.length} section{sections.length === 1 ? '' : 's'} · {plainTokens(active.text).length} words</p></div><div className="session-plan"><b>Today’s set · {sessionSections.length} section{sessionSections.length === 1 ? '' : 's'}</b><span>{sessionSections.map(index => index + 1).join(' · ')}</span><small>Due reviews are mixed with new sections. Finish with one combined recall to connect the passages.</small></div><div className="mode-grid">
           <ModeCard icon={<BookOpen/>} title="Read & reveal" text="Reveal the passage gradually, then recall it from memory." onClick={() => selectMode('hide')}/>
           <ModeCard icon={<ListChecks/>} title="First letters" text="Use each word’s first letter as a gentle prompt." onClick={() => selectMode('first')}/>
           <ModeCard icon={<Target/>} title="Fill the gaps" text="Type the missing words as they appear." onClick={() => selectMode('cloze')}/>
           <ModeCard icon={<FileText/>} title="Type from memory" text="Recall the whole section without seeing the text." onClick={() => selectMode('type')}/>
         </div></div> : !checked ? <>
-          <div className="session-progress"><span>SECTION {sectionIndex + 1} OF {sections.length}</span><span>{stage === 4 ? 'FULL RECALL' : `STAGE ${stage} OF 3`}</span><div className="progress-track"><b style={{ width: `${Math.round(((sectionIndex + (stage === 4 ? 1 : stage / 4)) / sections.length) * 100)}%` }}/></div></div>
+          <div className="session-progress"><span>{linking ? 'CONNECT THE SECTIONS' : `SECTION ${sessionPosition + 1} OF ${sessionSections.length}`}</span><span>{stage === 4 ? 'FULL RECALL' : `STAGE ${stage} OF 3`}</span><div className="progress-track"><b style={{ width: `${Math.round(((sessionPosition + (stage === 4 ? 1 : stage / 4)) / sessionSections.length) * 100)}%` }}/></div></div>
           <div className={`recall-card ${isRTL(active.language) ? 'rtl' : ''}`} dir={isRTL(active.language) ? 'rtl' : 'auto'}><div className="card-label"><span>{stage === 4 ? 'RECALL FROM MEMORY' : modeLabel(practiceMode)}</span><span className="card-word-count">{plainTokens(sectionText).length} words</span></div>
             {stage === 4 ? <textarea className="recall-input" dir="auto" value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Start writing from memory…" autoFocus aria-label="Type the passage from memory"/> : <div className="passage-words">{renderTokens(wordTokens, practiceMode, stage, blankIndexes, blankAnswers, blankChecked, setBlankAnswers, checkBlanks)}</div>}
-            <div className="card-foot"><span><FileText size={15}/> Section {sectionIndex + 1} of {sections.length}</span><span>{stage === 4 && answer.trim() ? plainTokens(answer).length : ''}</span></div>
+            <div className="card-foot"><span><FileText size={15}/>{linking ? `Sections ${sessionSections.map(index => index + 1).join(' + ')}` : `Section ${sectionIndex + 1} of ${sections.length}`}</span><span>{stage === 4 && answer.trim() ? plainTokens(answer).length : ''}</span></div>
           </div>
           {stage === 3 && blankChecked && <div className={`blank-feedback ${blanksCorrect === blankIndexes.length ? 'all-correct' : ''}`} role="status">{blanksCorrect} of {blankIndexes.length} blanks correct. {blanksCorrect === blankIndexes.length ? 'Ready for full recall?' : 'Review the highlighted words, then continue.'}</div>}
           <div className="practice-controls"><button className="subtle" onClick={() => { setStage(value => Math.max(1, value - 1)); setBlankChecked(false) }} disabled={stage <= 1}><ChevronLeft size={16}/> Easier</button>{stage < 4 && <button className="subtle" onClick={() => { setStage(value => Math.min(3, value + 1)); setBlankChecked(false) }}>Harder <ChevronRight size={16}/></button>}<span className="control-spacer"/><button className="text-button" onClick={() => { setStage(1); setBlankChecked(false); setAnswer('') }}>Show text</button>{stage === 3 && blankIndexes.length > 0 && !blankChecked ? <button className="primary" onClick={checkBlanks}>Check blanks <Check size={16}/></button> : stage < 4 ? <button className="primary" onClick={startRecall}>Try full recall <ChevronRight size={16}/></button> : <button className="primary" onClick={finish} disabled={!answer.trim()}>Check recall <Check size={16}/></button>}</div>
           <div className="encouragement"><Sparkles size={15}/> {practiceMode === 'hide' ? 'Reveal a little less each time.' : practiceMode === 'first' ? 'Use the first letters as gentle clues.' : practiceMode === 'cloze' ? 'Fill each gap before moving on.' : 'Take your time and write what you remember.'}</div>
-        </> : <div className="result-card"><div className="result-icon"><Check size={24}/></div><div className="eyebrow">SECTION COMPLETE</div><h2>{(result?.accuracy ?? 0) >= 85 ? 'Nicely recalled.' : 'Good effort. Keep practicing.'}</h2><p>Here’s how your recall compared with the original.</p><div className="result-stats"><div><strong>{result?.accuracy ?? 0}%</strong><span>Accuracy</span></div><div><strong>{formatTime(elapsed)}</strong><span>Time</span></div><div><strong>{plainTokens(sectionText).length}</strong><span>Words</span></div></div><div className="comparison" dir="auto">{result?.rows.map((row, index) => <span key={index} className={row.ok ? 'correct' : 'incorrect'}>{row.word}{index < (result?.rows.length ?? 0) - 1 ? ' ' : ''}</span>)}{result?.extras.length ? <div className="extra-words">Extra words: {result.extras.join(' ')}</div> : null}</div><div className="result-actions">{sectionIndex + 1 < sections.length ? <button className="primary" onClick={nextSection}>Next section <ChevronRight size={16}/></button> : <button className="primary" onClick={exitPractice}>Done <Check size={16}/></button>}<button className="subtle" onClick={() => { setChecked(false); setAnswer(''); setElapsed(0); setStartedAt(Date.now()); setStage(4) }}>Try again</button></div></div>}
+        </> : <div className="result-card"><div className="result-icon"><Check size={24}/></div><div className="eyebrow">{linking || sessionSections.length === 1 ? 'SESSION COMPLETE' : 'SECTION COMPLETE'}</div><h2>{(result?.accuracy ?? 0) >= 85 ? 'Nicely recalled.' : 'Good effort. Keep practicing.'}</h2><p>{linking ? `You connected sections ${sessionSections.map(index => index + 1).join(', ')} in one recall.` : 'Here’s how your recall compared with the original.'}</p><div className="result-stats"><div><strong>{result?.accuracy ?? 0}%</strong><span>Accuracy</span></div><div><strong>{formatTime(elapsed)}</strong><span>Time</span></div><div><strong>{plainTokens(sectionText).length}</strong><span>Words</span></div></div><div className="comparison" dir="auto">{result?.rows.map((row, index) => <span key={index} className={row.ok ? 'correct' : 'incorrect'}>{row.word}{index < (result?.rows.length ?? 0) - 1 ? ' ' : ''}</span>)}{result?.extras.length ? <div className="extra-words">Extra words: {result.extras.join(' ')}</div> : null}</div><div className="result-actions">{!linking && sessionPosition + 1 < sessionSections.length ? <button className="primary" onClick={nextSection}>Next section <ChevronRight size={16}/></button> : !linking && sessionSections.length > 1 ? <button className="primary" onClick={startLinkRecall}>Connect {sessionSections.length} sections <ChevronRight size={16}/></button> : <button className="primary" onClick={exitPractice}>Done <Check size={16}/></button>}<button className="subtle" onClick={() => { setChecked(false); setAnswer(''); setResult(null); setElapsed(0); setStartedAt(Date.now()); setStage(4) }}>Try again</button></div></div>}
       </section> : <div className="content">
         {page === 'Home' && <>
           <div className="welcome-row"><div><div className="eyebrow">{currentDay.toUpperCase()} · {currentDate.toUpperCase()}</div><h1>{greeting} <span className="wave">✳</span></h1><p>A little practice today goes a long way.</p></div><button className="primary desktop-add" onClick={() => openAdd()}><Plus size={17}/> Add a passage</button></div>
